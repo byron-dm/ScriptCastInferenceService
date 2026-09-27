@@ -28,6 +28,7 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
 
     @property
     def is_loaded(self) -> bool:
+        """Indicates whether weights are in memory."""
         return self._model is not None
 
     def _ensure_repo_present(self) -> Path:
@@ -87,7 +88,7 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
         os.environ["MODELSCOPE_CACHE"] = str(settings.MODELS_DIR)
 
     def load_model(self) -> None:
-        """Prepares assets, model weights and harmonizes module precision."""
+        """Prepares assets and loads native model weights onto the target compute device."""
         if self.is_loaded:
             return
 
@@ -111,19 +112,20 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
                 f"Failed to import AutoModel from {cosy_root}: {exc}"
             ) from exc
 
-        # Instantiate CosyVoice3 wrapper with fp16 disabled to prevent torch.cuda.amp mismatch
-        self._model = AutoModel(model_dir=str(model_target_dir), fp16=False)
+        # Instantiate native CosyVoice3 wrapper
+        self._model = AutoModel(model_dir=str(model_target_dir))
 
-        # Force all Qwen2 weights recursively to float32 to eliminate BFloat16/Float conflicts
+        # Explicitly harmonize LLM submodules to BFloat16 to prevent matrix dtype mismatch
         core = getattr(self._model, "model", self._model)
         if hasattr(core, "llm") and isinstance(core.llm, torch.nn.Module):
-            core.llm.to(dtype=torch.float32)
+            core.llm.to(dtype=torch.bfloat16)
 
         sample_rate = getattr(self._model, "sample_rate", None)
         if sample_rate is not None:
             self._sample_rate = sample_rate
 
     def unload_model(self) -> None:
+        """Frees device VRAM and garbage-collects model references."""
         self._model = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -136,7 +138,7 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
         instruct_text: str | None = None,
         seed: int | None = None,
     ) -> str:
-        """Runs dialogue inference and saves concatenated audio to disk."""
+        """Runs dialogue inference via cross-lingual synthesis and saves audio to disk."""
         if not self.is_loaded:
             self.load_model()
 
@@ -153,26 +155,15 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
         )
 
         clean_text = script.strip()
-        formatted_text = f"{clean_text}<|endofprompt|>" if "<|endofprompt|>" not in clean_text else clean_text
+        formatted_prompt = f"You are a helpful assistant.<|endofprompt|><|en|>{clean_text}"
+
+        generator = self._model.inference_cross_lingual(
+            tts_text=formatted_prompt,
+            prompt_wav=reference_audio,
+            stream=False,
+        )
 
         audio_segments: list[torch.Tensor] = []
-
-        if instruct_text and instruct_text.strip():
-            generator = self._model.inference_instruct2(
-                tts_text=formatted_text,
-                instruct_text=instruct_text.strip(),
-                prompt_wav=reference_audio,
-                stream=False,
-                text_frontend=False,
-            )
-        else:
-            generator = self._model.inference_cross_lingual(
-                tts_text=formatted_text,
-                prompt_wav=reference_audio,
-                stream=False,
-                text_frontend=False,
-            )
-
         for chunk in generator:
             if "tts_speech" in chunk and chunk["tts_speech"] is not None:
                 audio_segments.append(chunk["tts_speech"].cpu())
@@ -181,15 +172,17 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
             raise RuntimeError("CosyVoice did not produce any audio segments")
 
         combined_tensor = torch.cat(audio_segments, dim=-1).to(torch.float32)
+
+        # Normalize audio peak safely without shape transpositions
         max_val = torch.max(torch.abs(combined_tensor))
         if max_val > 0:
             combined_tensor = combined_tensor.div(max_val)
         combined_tensor = combined_tensor.clamp(-1.0, 1.0)
 
-        audio_np: np.ndarray = combined_tensor.numpy().T
         dest_path = Path(output_file_path).resolve()
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
+        audio_np: np.ndarray = combined_tensor.squeeze().numpy()
         ext = dest_path.suffix.lower()
         output_format = "FLAC" if ext == ".flac" else "WAV"
 
