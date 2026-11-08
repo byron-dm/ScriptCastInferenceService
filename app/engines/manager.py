@@ -3,6 +3,7 @@
 from app.engines.base import (
     AudioCueProducer,
     BaseInferenceEngine,
+    VoiceDesignProducer,
     VoiceProducer,
 )
 from app.engines.breeze import BreezeEngine

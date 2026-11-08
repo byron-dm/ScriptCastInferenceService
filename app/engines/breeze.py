@@ -7,12 +7,16 @@ import threading
 from pathlib import Path
 
 from app.config import settings
-from app.engines.base import BaseInferenceEngine, VoiceProducer
+from app.engines.base import (
+    BaseInferenceEngine,
+    VoiceDesignProducer,
+    VoiceProducer,
+)
 
 SUPPORTED_EXTENSIONS = frozenset({".wav", ".flac"})
 
 
-class BreezeEngine(BaseInferenceEngine, VoiceProducer):
+class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
     """Breeze TTS 2 engine. Invokes infer.py as a subprocess."""
 
     def __init__(self, model_path: str | None = None) -> None:
@@ -76,16 +80,41 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer):
 
         return dest_path
 
+    @staticmethod
+    def _resolve_seed(seed: int | None) -> int:
+        # infer.py passes the seed straight to np.random.seed(), which rejects -1.
+        # Translate "random" (-1 or None) into a valid 32-bit seed here.
+        if seed is None or seed == -1:
+            return random.randint(0, 2**32 - 1)
+        return seed
+
+    def _run_infer(self, cmd: list[str]) -> None:
+        code_root = settings.BREEZE_CODE_PATH
+        result = subprocess.run(
+            cmd,
+            cwd=str(code_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Breeze inference failed.\n"
+                f"CMD: {' '.join(cmd)}\n"
+                f"STDOUT:\n{result.stdout}\n"
+                f"STDERR:\n{result.stderr}"
+            )
+
     def generate_voice(
-            self,
-            text: str,
-            output_file_path: str,
-            reference_audio_path: str | None = None,
-            reference_text: str | None = None,
-            instruction: str | None = None,
-            cfg_scale: float = 4.0,
-            speed: float = 1.0,
-            seed: int | None = None,
+        self,
+        text: str,
+        output_file_path: str,
+        reference_audio_path: str | None = None,
+        reference_text: str | None = None,
+        instruction: str | None = None,
+        cfg_scale: float = 4.0,
+        speed: float = 1.0,
+        seed: int | None = None,
     ) -> str:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
@@ -106,45 +135,62 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer):
         if not self.is_loaded:
             self.load_model()
 
-        code_root = settings.BREEZE_CODE_PATH
-        infer_script = code_root / "infer.py"
-
-        # infer.py passes the seed straight to np.random.seed(), which rejects -1.
-        # Translate "random" (-1 or None) into a valid 32-bit seed here.
-        if seed is None or seed == -1:
-            effective_seed = random.randint(0, 2 ** 32 - 1)
-        else:
-            effective_seed = seed
-
         cmd = [
             sys.executable,
-            str(infer_script),
-            str(self._model_path),  # positional model path
+            str(settings.BREEZE_CODE_PATH / "infer.py"),
+            str(self._model_path),
             "--text", text,
             "--ref-audio", reference_audio_path,
             "--ref-text", reference_text,
             "--output", str(dest_path),
             "--cfg-scale", str(cfg_scale),
-            "--seed", str(effective_seed),
+            "--seed", str(self._resolve_seed(seed)),
         ]
         if instruction:
             cmd += ["--instruction", instruction]
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(code_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        self._run_infer(cmd)
 
-        if result.returncode != 0:
+        if not dest_path.is_file():
             raise RuntimeError(
-                "Breeze inference failed.\n"
-                f"CMD: {' '.join(cmd)}\n"
-                f"STDOUT:\n{result.stdout}\n"
-                f"STDERR:\n{result.stderr}"
+                f"infer.py exited successfully but no file was written to {dest_path}"
             )
+
+        return str(dest_path)
+
+    def generate_voice_design(
+        self,
+        text: str,
+        instruction: str,
+        output_file_path: str,
+        cfg_scale: float = 4.0,
+        seed: int | None = None,
+    ) -> str:
+        if not text or not text.strip():
+            raise ValueError("text cannot be empty")
+        if not instruction or not instruction.strip():
+            raise ValueError(
+                "instruction is required for voice design and must describe "
+                "the target speaker and delivery style."
+            )
+
+        dest_path = self._prepare_output_path(output_file_path)
+
+        if not self.is_loaded:
+            self.load_model()
+
+        cmd = [
+            sys.executable,
+            str(settings.BREEZE_CODE_PATH / "infer.py"),
+            str(self._model_path),
+            "--text", text,
+            "--instruction", instruction,
+            "--output", str(dest_path),
+            "--cfg-scale", str(cfg_scale),
+            "--seed", str(self._resolve_seed(seed)),
+        ]
+
+        self._run_infer(cmd)
 
         if not dest_path.is_file():
             raise RuntimeError(

@@ -54,3 +54,18 @@ class VoiceProducer(ABC):
         seed: int | None = None,
     ) -> str:
         pass
+
+
+class VoiceDesignProducer(ABC):
+    """Contract for engines that synthesize a novel voice from a description."""
+
+    @abstractmethod
+    def generate_voice_design(
+        self,
+        text: str,
+        instruction: str,
+        output_file_path: str,
+        cfg_scale: float = 4.0,
+        seed: int | None = None,
+    ) -> str:
+        pass

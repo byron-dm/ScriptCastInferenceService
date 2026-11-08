@@ -4,13 +4,16 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
-from app.engines.base import AudioCueProducer, VoiceProducer
+from app.engines.base import AudioCueProducer, VoiceDesignProducer, VoiceProducer
 from app.engines.manager import engine_manager
 
 app = FastAPI(
     title="ScriptCast Inference Service",
-    version="1.3.0",
-    description="Multi-engine audio synthesis microservice (Audio, Voice Cloning)",
+    version="1.4.0",
+    description=(
+        "Multi-engine audio synthesis microservice "
+        "(Audio, Voice Cloning, Voice Design)"
+    ),
 )
 
 MAX_AUDIO_DURATION_SECONDS = 285.0
@@ -81,6 +84,29 @@ class RenderVoiceCloneRequest(BaseModel):
     seed: int | None = Field(default=None, description="Seed; -1 or null = random")
 
 
+class RenderVoiceDesignRequest(BaseModel):
+    engine_name: str = Field(
+        default="breeze",
+        description="Voice design engine. Only 'breeze' is supported.",
+    )
+    text: str = Field(..., min_length=1, description="Speech content to synthesize")
+    instruction: str = Field(
+        ...,
+        min_length=1,
+        description="Description of the target voice and delivery style",
+    )
+    output_file_path: str = Field(
+        ..., description="Target file path (.flac or .wav)"
+    )
+    cfg_scale: float = Field(
+        default=4.0, ge=0.1, le=10.0, description="CFG scale for instruction adherence"
+    )
+    seed: int | None = Field(
+        default=None,
+        description="Seed; -1 or null = random. Different seeds yield different voices.",
+    )
+
+
 class RenderResponse(BaseModel):
     status: str
     file_path: str
@@ -146,6 +172,32 @@ def render_voice_clone(request: RenderVoiceCloneRequest):
             instruction=request.instruction,
             cfg_scale=request.cfg_scale,
             speed=request.speed,
+            seed=request.seed,
+        )
+        return RenderResponse(status="success", file_path=saved_path)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/render_voice_design", response_model=RenderResponse)
+def render_voice_design(request: RenderVoiceDesignRequest):
+    try:
+        if request.engine_name != "breeze":
+            raise ValueError(
+                "Voice design is only supported by 'breeze'. "
+                f"Received engine_name='{request.engine_name}'."
+            )
+
+        engine = engine_manager.get_engine_by_type(
+            request.engine_name, VoiceDesignProducer
+        )
+        saved_path = engine.generate_voice_design(
+            text=request.text,
+            instruction=request.instruction,
+            output_file_path=request.output_file_path,
+            cfg_scale=request.cfg_scale,
             seed=request.seed,
         )
         return RenderResponse(status="success", file_path=saved_path)
