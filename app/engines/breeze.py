@@ -77,15 +77,15 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer):
         return dest_path
 
     def generate_voice(
-        self,
-        text: str,
-        output_file_path: str,
-        reference_audio_path: str | None = None,
-        reference_text: str | None = None,
-        instruction: str | None = None,
-        cfg_scale: float = 4.0,
-        speed: float = 1.0,
-        seed: int | None = None,
+            self,
+            text: str,
+            output_file_path: str,
+            reference_audio_path: str | None = None,
+            reference_text: str | None = None,
+            instruction: str | None = None,
+            cfg_scale: float = 4.0,
+            speed: float = 1.0,
+            seed: int | None = None,
     ) -> str:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
@@ -109,24 +109,26 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer):
         code_root = settings.BREEZE_CODE_PATH
         infer_script = code_root / "infer.py"
 
-        cmd = [
-            sys.executable,
-            str(infer_script),
-            str(self._model_path),           # positional model path
-            "--text", text,
-            "--ref-audio", reference_audio_path,
-            "--ref-text", reference_text,
-            "--output", str(dest_path),
-            "--cfg-scale", str(cfg_scale),
-        ]
-        if instruction:
-            cmd += ["--instruction", instruction]
+        # infer.py passes the seed straight to np.random.seed(), which rejects -1.
+        # Translate "random" (-1 or None) into a valid 32-bit seed here.
         if seed is None or seed == -1:
             effective_seed = random.randint(0, 2 ** 32 - 1)
         else:
             effective_seed = seed
 
-        cmd += ["--seed", str(effective_seed)]
+        cmd = [
+            sys.executable,
+            str(infer_script),
+            str(self._model_path),  # positional model path
+            "--text", text,
+            "--ref-audio", reference_audio_path,
+            "--ref-text", reference_text,
+            "--output", str(dest_path),
+            "--cfg-scale", str(cfg_scale),
+            "--seed", str(effective_seed),
+        ]
+        if instruction:
+            cmd += ["--instruction", instruction]
 
         result = subprocess.run(
             cmd,

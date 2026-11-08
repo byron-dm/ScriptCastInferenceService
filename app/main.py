@@ -10,7 +10,7 @@ from app.engines.manager import engine_manager
 app = FastAPI(
     title="ScriptCast Inference Service",
     version="1.2.0",
-    description="Multi-engine audio synthesis microservice (Audio, Dialogue, Voice)",
+    description="Multi-engine audio synthesis microservice (Audio, Dialogue, Voice Cloning)",
 )
 
 MAX_AUDIO_DURATION_SECONDS = 285.0
@@ -68,33 +68,30 @@ class RenderDialogueRequest(BaseModel):
         extra = "ignore"
 
 
-class RenderVoiceRequest(BaseModel):
+class RenderVoiceCloneRequest(BaseModel):
     engine_name: str = Field(
-        default="breeze", description="Target voice synthesis engine"
+        default="breeze", description="Target voice cloning engine"
     )
     text: str = Field(..., min_length=1, description="Speech content to synthesize")
     output_file_path: str = Field(
         ..., description="Target file path (.flac or .wav)"
     )
-    reference_audio_path: str | None = Field(
-        default=None,
-        description="Absolute path to reference audio for cloning/direction",
+    reference_audio_path: str = Field(
+        ..., description="Absolute path to the reference audio to clone"
     )
-    reference_text: str | None = Field(
-        default=None,
-        description="Exact transcript of the reference audio (required for clone/direction)",
+    reference_text: str = Field(
+        ...,
+        min_length=1,
+        description="Exact transcript of the reference audio",
     )
     instruction: str | None = Field(
         default=None,
-        description="Voice direction instruction (selects Voice Direction mode when provided)",
+        description="Voice direction instruction (tone, emotion, pace)",
     )
     cfg_scale: float = Field(
-        default=4.0, ge=0.1, le=10.0, description="CFG scale for Voice Direction"
+        default=4.0, ge=0.1, le=10.0, description="CFG scale for voice direction"
     )
-    speed: float = Field(
-        default=1.0, gt=0.2, le=3.0, description="Speech rate (unused by Breeze)"
-    )
-    seed: int | None = Field(default=None)
+    seed: int | None = Field(default=None, description="Seed; -1 or null = random")
 
 
 class RenderResponse(BaseModel):
@@ -158,8 +155,8 @@ def render_dialogue(request: RenderDialogueRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/render_voice", response_model=RenderResponse)
-def render_voice(request: RenderVoiceRequest):
+@app.post("/render_voice_clone", response_model=RenderResponse)
+def render_voice_clone(request: RenderVoiceCloneRequest):
     try:
         engine = engine_manager.get_engine_by_type(
             request.engine_name, VoiceProducer
@@ -171,7 +168,6 @@ def render_voice(request: RenderVoiceRequest):
             reference_text=request.reference_text,
             instruction=request.instruction,
             cfg_scale=request.cfg_scale,
-            speed=request.speed,
             seed=request.seed,
         )
         return RenderResponse(status="success", file_path=saved_path)
