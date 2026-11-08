@@ -56,6 +56,10 @@ class Settings:
         self.DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
         self.STABLE_AUDIO_MODEL_ID: str = "stabilityai/stable-audio-3-medium"
 
+        # Breeze: code and checkpoint both live under MODELS_DIR.
+        self.BREEZE_CODE_PATH: Path = self.MODELS_DIR / "breeze-tts"
+        self.BREEZE_MODEL_PATH: Path = self.MODELS_DIR / "breeze-tts-2"
+
         self.MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         os.environ["HF_HOME"] = str(self.MODELS_DIR)
