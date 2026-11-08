@@ -4,29 +4,29 @@ from pathlib import Path
 import subprocess
 import sys
 import zipfile
+
 from huggingface_hub import snapshot_download
 import numpy as np
 import soundfile as sf
 import torch
 
 from app.config import settings
-from app.engines.base import BaseInferenceEngine, DialogueProducer
+from app.engines.base import BaseInferenceEngine, VoiceProducer
 
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("modelscope").setLevel(logging.WARNING)
 
+SUPPORTED_EXTENSIONS = frozenset({".wav", ".flac"})
 
-class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
-    """Inference engine implementing CosyVoice3 inside the configured cache directory."""
 
-    SYSTEM_PROMPT = "You are a helpful assistant."
-    ENDOFPROMPT = "<|endofprompt|>"
+class CosyVoiceEngine(BaseInferenceEngine, VoiceProducer):
+    """CosyVoice3 voice cloning engine (zero-shot, no style instruction)."""
 
     def __init__(self, repo_id: str = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512") -> None:
         self.repo_id: str = repo_id
         self._model = None
         self._sample_rate: int = 24000
-        self._device: str = settings.DEVICE if torch.cuda.is_available() else "cpu"
+        self._device: str = settings.DEVICE
 
     @property
     def is_loaded(self) -> bool:
@@ -39,9 +39,7 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
             settings.MODELS_DIR.mkdir(parents=True, exist_ok=True)
             subprocess.run(
                 [
-                    "git",
-                    "clone",
-                    "--recursive",
+                    "git", "clone", "--recursive",
                     "https://github.com/FunAudioLLM/CosyVoice.git",
                     str(cosy_root),
                 ],
@@ -124,58 +122,76 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def _format_instruct(self, instruct_text: str) -> str:
-        """
-        Replicates FL_CosyVoice3_Instruct2 formatting from ComfyUI:
-            You are a helpful assistant.\n<instruct><|endofprompt|>
-        """
-        raw = instruct_text.strip()
-        if raw.startswith(self.SYSTEM_PROMPT):
-            raw = raw[len(self.SYSTEM_PROMPT):].lstrip("\n")
-        if raw.endswith(self.ENDOFPROMPT):
-            raw = raw[:-len(self.ENDOFPROMPT)].rstrip()
-        return f"{self.SYSTEM_PROMPT}\n{raw}{self.ENDOFPROMPT}"
+    def _prepare_output_path(self, output_file_path: str) -> Path:
+        if not output_file_path:
+            raise ValueError("output_file_path cannot be empty")
 
-    def generate_dialogue(
+        dest_path = Path(output_file_path)
+        if not dest_path.is_absolute():
+            raise ValueError("output_file_path must be an absolute path")
+        if dest_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise ValueError(
+                f"Unsupported extension: '{dest_path.suffix}'. "
+                f"Use: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+            )
+
+        parent = dest_path.parent
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ValueError(f"Cannot create directory {parent}: {exc}") from exc
+        if not os.access(parent, os.W_OK):
+            raise ValueError(f"No write permission for {parent}")
+
+        return dest_path
+
+    def generate_voice(
         self,
-        script: str,
+        text: str,
         output_file_path: str,
-        speaker_id: str | None = None,
-        instruct_text: str | None = None,
+        reference_audio_path: str | None = None,
+        reference_text: str | None = None,
+        instruction: str | None = None,
+        cfg_scale: float = 4.0,
+        speed: float = 1.0,
         seed: int | None = None,
     ) -> str:
+        if not text or not text.strip():
+            raise ValueError("text cannot be empty")
+
+        if not reference_audio_path:
+            raise ValueError(
+                "reference_audio_path is required for CosyVoice cloning"
+            )
+        if not Path(reference_audio_path).is_file():
+            raise ValueError(f"Reference audio not found: {reference_audio_path}")
+
+        # `instruction` and `reference_text` are accepted but ignored.
+        # CosyVoice3's instruct2 mode does not reliably support free-form
+        # instructions, so we use zero-shot cloning instead.
+        dest_path = self._prepare_output_path(output_file_path)
+
         if not self.is_loaded:
             self.load_model()
 
-        assert self._model is not None
+        if self._model is None:
+            raise RuntimeError("Model not loaded after load_model()")
 
-        if seed is not None:
+        if seed is not None and seed != -1:
             torch.manual_seed(seed)
             if self._device == "cuda":
                 torch.cuda.manual_seed_all(seed)
 
-        reference_audio = (
-            speaker_id
-            or str(settings.MODELS_DIR / "CosyVoice" / "asset" / "zero_shot_prompt.wav")
-        )
-
-        formatted_instruct = self._format_instruct(
-            instruct_text or "Speak in a warm and friendly tone."
-        )
-
-        generator = self._model.inference_instruct2(
-            tts_text=script.strip(),
-            instruct_text=formatted_instruct,
-            prompt_wav=reference_audio,
-            zero_shot_spk_id="",
+        generator = self._model.inference_zero_shot(
+            tts_text=text.strip(),
+            prompt_text="",
+            prompt_wav=reference_audio_path,
             stream=False,
-            speed=1.0,
-            text_frontend=True,
         )
 
         audio_segments: list[torch.Tensor] = []
         for chunk in generator:
-            if chunk.get("tts_speech") is not None:
+            if "tts_speech" in chunk and chunk["tts_speech"] is not None:
                 audio_segments.append(chunk["tts_speech"].cpu())
 
         if not audio_segments:
@@ -188,13 +204,9 @@ class CosyVoiceEngine(BaseInferenceEngine, DialogueProducer):
             combined_tensor = combined_tensor.div(max_val)
         combined_tensor = combined_tensor.clamp(-1.0, 1.0)
 
-        dest_path = Path(output_file_path).resolve()
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-
         audio_np: np.ndarray = combined_tensor.squeeze().numpy()
-        ext = dest_path.suffix.lower()
-        output_format = "FLAC" if ext == ".flac" else "WAV"
 
+        output_format = "FLAC" if dest_path.suffix.lower() == ".flac" else "WAV"
         sf.write(
             file=str(dest_path),
             data=audio_np,

@@ -38,21 +38,6 @@ class AudioCueProducer(ABC):
         pass
 
 
-class DialogueProducer(ABC):
-    """Contract for multirole or conversational dialogue generation engines."""
-
-    @abstractmethod
-    def generate_dialogue(
-        self,
-        script: str,
-        output_file_path: str,
-        speaker_id: str | None = None,
-        instruct_text: str | None = None,
-        seed: int | None = None,
-    ) -> str:
-        pass
-
-
 class VoiceProducer(ABC):
     """Contract for single-speaker TTS and voice-cloning synthesis engines."""
 
@@ -62,6 +47,9 @@ class VoiceProducer(ABC):
         text: str,
         output_file_path: str,
         reference_audio_path: str | None = None,
+        reference_text: str | None = None,
+        instruction: str | None = None,
+        cfg_scale: float = 4.0,
         speed: float = 1.0,
         seed: int | None = None,
     ) -> str:

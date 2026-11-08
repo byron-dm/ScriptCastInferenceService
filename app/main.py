@@ -4,17 +4,18 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
-from app.engines.base import AudioCueProducer, DialogueProducer, VoiceProducer
+from app.engines.base import AudioCueProducer, VoiceProducer
 from app.engines.manager import engine_manager
 
 app = FastAPI(
     title="ScriptCast Inference Service",
-    version="1.2.0",
-    description="Multi-engine audio synthesis microservice (Audio, Dialogue, Voice Cloning)",
+    version="1.3.0",
+    description="Multi-engine audio synthesis microservice (Audio, Voice Cloning)",
 )
 
 MAX_AUDIO_DURATION_SECONDS = 285.0
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".flac"}
+VOICE_CLONE_ENGINES = {"breeze", "cosyvoice"}
 
 
 # --- DTOs ---
@@ -52,25 +53,9 @@ class RenderAudioRequest(BaseModel):
         return v
 
 
-class RenderDialogueRequest(BaseModel):
-    """Schema for dialogue generation requests across engines."""
-
-    engine_name: str
-    script: str
-    output_file_path: str
-    prompt_speech_path: str | None = None
-    speaker_id: str | None = None
-    instruct_text: str | None = None
-    seed: int | None = None
-
-    class Config:
-        populate_by_name = True
-        extra = "ignore"
-
-
 class RenderVoiceCloneRequest(BaseModel):
     engine_name: str = Field(
-        default="breeze", description="Target voice cloning engine"
+        default="breeze", description="Voice cloning engine: breeze or cosyvoice"
     )
     text: str = Field(..., min_length=1, description="Speech content to synthesize")
     output_file_path: str = Field(
@@ -79,17 +64,19 @@ class RenderVoiceCloneRequest(BaseModel):
     reference_audio_path: str = Field(
         ..., description="Absolute path to the reference audio to clone"
     )
-    reference_text: str = Field(
-        ...,
-        min_length=1,
-        description="Exact transcript of the reference audio",
+    reference_text: str | None = Field(
+        default=None,
+        description="Exact transcript of the reference audio (required for breeze)",
     )
     instruction: str | None = Field(
         default=None,
-        description="Voice direction instruction (tone, emotion, pace)",
+        description="Voice direction instruction (used by breeze; ignored by cosyvoice)",
     )
     cfg_scale: float = Field(
-        default=4.0, ge=0.1, le=10.0, description="CFG scale for voice direction"
+        default=4.0, ge=0.1, le=10.0, description="CFG scale (used by breeze)"
+    )
+    speed: float = Field(
+        default=1.0, gt=0.2, le=3.0, description="Speech rate (used by cosyvoice)"
     )
     seed: int | None = Field(default=None, description="Seed; -1 or null = random")
 
@@ -134,30 +121,20 @@ def render_audio(request: RenderAudioRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/render_dialogue", response_model=RenderResponse)
-def render_dialogue(request: RenderDialogueRequest):
-    try:
-        engine = engine_manager.get_engine_by_type(
-            request.engine_name, DialogueProducer
-        )
-        reference_path = request.prompt_speech_path or request.speaker_id
-        output_path = engine.generate_dialogue(
-            script=request.script,
-            output_file_path=request.output_file_path,
-            speaker_id=reference_path,
-            instruct_text=request.instruct_text,
-            seed=request.seed,
-        )
-        return RenderResponse(status="success", file_path=output_path)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
 @app.post("/render_voice_clone", response_model=RenderResponse)
 def render_voice_clone(request: RenderVoiceCloneRequest):
     try:
+        if request.engine_name not in VOICE_CLONE_ENGINES:
+            raise ValueError(
+                f"Unsupported voice cloning engine '{request.engine_name}'. "
+                f"Available: {', '.join(sorted(VOICE_CLONE_ENGINES))}"
+            )
+
+        if request.engine_name == "breeze" and not request.reference_text:
+            raise ValueError(
+                "reference_text is required when engine_name is 'breeze'"
+            )
+
         engine = engine_manager.get_engine_by_type(
             request.engine_name, VoiceProducer
         )
@@ -168,6 +145,7 @@ def render_voice_clone(request: RenderVoiceCloneRequest):
             reference_text=request.reference_text,
             instruction=request.instruction,
             cfg_scale=request.cfg_scale,
+            speed=request.speed,
             seed=request.seed,
         )
         return RenderResponse(status="success", file_path=saved_path)

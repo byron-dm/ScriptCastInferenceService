@@ -3,7 +3,6 @@
 from app.engines.base import (
     AudioCueProducer,
     BaseInferenceEngine,
-    DialogueProducer,
     VoiceProducer,
 )
 from app.engines.breeze import BreezeEngine
@@ -19,12 +18,11 @@ class EngineManager:
     def __init__(self) -> None:
         self._engines: Dict[str, BaseInferenceEngine] = {
             "stable-audio-3": StableAudioEngine(),
-            "cosyvoice": CosyVoiceEngine(),
             "breeze": BreezeEngine(),
+            "cosyvoice": CosyVoiceEngine(),
         }
 
     def get_engine_by_type(self, engine_name: str, expected_type: Type[T]) -> T:
-        """Retrieves and verifies that the engine satisfies the expected contract interface."""
         if engine_name not in self._engines:
             available = ", ".join(self._engines.keys())
             raise ValueError(
