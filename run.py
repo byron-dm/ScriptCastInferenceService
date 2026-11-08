@@ -1,9 +1,12 @@
 ﻿import os
+
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+
 import uvicorn
+
 from app.config import settings
 from app.main import app
 
-os.environ["TORCHDYNAMO_DISABLE"] = "1"
 
 if __name__ == "__main__":
     uvicorn.run(

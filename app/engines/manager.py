@@ -1,4 +1,5 @@
 ﻿from typing import Dict, Type, TypeVar
+
 from app.engines.base import (
     AudioCueProducer,
     BaseInferenceEngine,

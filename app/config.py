@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 import sys
 
+import torch
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -51,7 +53,7 @@ class Settings:
         self.MODELS_DIR: Path = Path(clean_cache_dir).resolve()
         self.HF_TOKEN: str | None = args.hf_token
 
-        self.DEVICE: str = "cuda"
+        self.DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
         self.STABLE_AUDIO_MODEL_ID: str = "stabilityai/stable-audio-3-medium"
 
         self.MODELS_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,8 @@
-﻿from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+﻿from pathlib import Path
+from typing import Literal
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.engines.base import AudioCueProducer, DialogueProducer, VoiceProducer
@@ -11,6 +14,10 @@ app = FastAPI(
     description="Multi-engine audio synthesis microservice (Audio, Dialogue, Voice)",
 )
 
+# Tope nativo de stable-audio-3-medium: ~285s. Se valida también en el motor.
+MAX_AUDIO_DURATION_SECONDS = 285.0
+SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".flac"}
+
 
 # --- DTOs ---
 
@@ -19,9 +26,14 @@ class RenderAudioRequest(BaseModel):
     engine_name: str = Field(
         default="stable-audio-3", description="Target sound/cue engine"
     )
-    prompt: str = Field(..., description="Prompt describing sound or music")
+    prompt: str = Field(
+        ..., min_length=1, description="Prompt describing sound or music"
+    )
     duration_seconds: float = Field(
-        ..., gt=0.0, description="Duration in seconds"
+        ...,
+        gt=0.0,
+        le=MAX_AUDIO_DURATION_SECONDS,
+        description="Duration in seconds",
     )
     output_file_path: str = Field(
         ..., description="Target file path (.flac or .wav)"
@@ -30,6 +42,18 @@ class RenderAudioRequest(BaseModel):
     steps: int = Field(default=8, ge=1, le=250, description="Inference steps")
     cfg_scale: float = Field(default=1.0, ge=1.0, le=15.0)
     sampler_type: str = Field(default="pingpong")
+
+    @field_validator("output_file_path")
+    @classmethod
+    def validate_output_path(cls, v: str) -> str:
+        p = Path(v)
+        if not p.is_absolute():
+            raise ValueError("output_file_path debe ser una ruta absoluta")
+        if p.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+            raise ValueError(
+                "output_file_path debe terminar en .wav o .flac"
+            )
+        return v
 
 
 class RenderDialogueRequest(BaseModel):
