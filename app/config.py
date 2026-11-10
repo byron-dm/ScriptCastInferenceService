@@ -8,7 +8,7 @@ import torch
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="ScriptCast Python Inference Service"
+        description="Local Audio Inference Service"
     )
     default_base = Path(__file__).resolve().parent.parent
     default_cache = default_base / "models"
@@ -16,19 +16,19 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--host",
         type=str,
-        default=os.getenv("SCRIPTCAST_HOST", "127.0.0.1"),
+        default=os.getenv("INFERENCE_HOST", "127.0.0.1"),
         help="Host address to bind the service",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("SCRIPTCAST_PORT", "8000")),
+        default=int(os.getenv("INFERENCE_PORT", "8000")),
         help="Port to bind the service",
     )
     parser.add_argument(
         "--cache-dir",
         type=str,
-        default=os.getenv("SCRIPTCAST_MODELS_CACHE", str(default_cache)),
+        default=os.getenv("INFERENCE_MODELS_CACHE", str(default_cache)),
         help="Base directory where model weights are stored",
     )
     parser.add_argument(
@@ -56,11 +56,9 @@ class Settings:
         self.DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
         self.STABLE_AUDIO_MODEL_ID: str = "stabilityai/stable-audio-3-medium"
 
-        # Breeze: code and checkpoint both live under MODELS_DIR.
         self.BREEZE_CODE_PATH: Path = self.MODELS_DIR / "breeze-tts"
         self.BREEZE_MODEL_PATH: Path = self.MODELS_DIR / "breeze-tts-2"
 
-        # OmniVoice: checkpoint lives under MODELS_DIR.
         self.OMNIVOICE_MODEL_PATH: Path = self.MODELS_DIR / "omnivoice"
 
         self.MODELS_DIR.mkdir(parents=True, exist_ok=True)

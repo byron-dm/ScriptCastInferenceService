@@ -8,7 +8,7 @@ from app.engines.base import AudioCueProducer, VoiceDesignProducer, VoiceProduce
 from app.engines.manager import engine_manager
 
 app = FastAPI(
-    title="ScriptCast Inference Service",
+    title="Audio Inference Service",
     version="1.5.0",
     description=(
         "Multi-engine audio synthesis microservice "

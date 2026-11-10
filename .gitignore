@@ -1,0 +1,25 @@
+﻿# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- PyCharm ---
+.idea/
+*.iml
+out/
+
+# --- OS Junk ---
+.DS_Store
+Thumbs.db
+
+# --- Local Configs & Logs ---
+*.log
+.env
+.env.*
+!.env.example
