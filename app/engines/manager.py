@@ -7,7 +7,7 @@ from app.engines.base import (
     VoiceProducer,
 )
 from app.engines.breeze import BreezeEngine
-from app.engines.cosyvoice import CosyVoiceEngine
+from app.engines.omnivoice import OmniVoiceEngine
 from app.engines.stable_audio import StableAudioEngine
 
 T = TypeVar("T")
@@ -20,7 +20,7 @@ class EngineManager:
         self._engines: Dict[str, BaseInferenceEngine] = {
             "stable-audio-3": StableAudioEngine(),
             "breeze": BreezeEngine(),
-            "cosyvoice": CosyVoiceEngine(),
+            "omnivoice": OmniVoiceEngine(),
         }
 
     def get_engine_by_type(self, engine_name: str, expected_type: Type[T]) -> T:

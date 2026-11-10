@@ -60,6 +60,9 @@ class Settings:
         self.BREEZE_CODE_PATH: Path = self.MODELS_DIR / "breeze-tts"
         self.BREEZE_MODEL_PATH: Path = self.MODELS_DIR / "breeze-tts-2"
 
+        # OmniVoice: checkpoint lives under MODELS_DIR.
+        self.OMNIVOICE_MODEL_PATH: Path = self.MODELS_DIR / "omnivoice"
+
         self.MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         os.environ["HF_HOME"] = str(self.MODELS_DIR)

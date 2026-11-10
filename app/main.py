@@ -9,7 +9,7 @@ from app.engines.manager import engine_manager
 
 app = FastAPI(
     title="ScriptCast Inference Service",
-    version="1.4.0",
+    version="1.5.0",
     description=(
         "Multi-engine audio synthesis microservice "
         "(Audio, Voice Cloning, Voice Design)"
@@ -18,7 +18,8 @@ app = FastAPI(
 
 MAX_AUDIO_DURATION_SECONDS = 285.0
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".flac"}
-VOICE_CLONE_ENGINES = {"breeze", "cosyvoice"}
+VOICE_CLONE_ENGINES = {"breeze", "omnivoice"}
+VOICE_DESIGN_ENGINES = {"breeze"}
 
 
 # --- DTOs ---
@@ -58,7 +59,8 @@ class RenderAudioRequest(BaseModel):
 
 class RenderVoiceCloneRequest(BaseModel):
     engine_name: str = Field(
-        default="breeze", description="Voice cloning engine: breeze or cosyvoice"
+        default="breeze",
+        description="Voice cloning engine: breeze or omnivoice",
     )
     text: str = Field(..., min_length=1, description="Speech content to synthesize")
     output_file_path: str = Field(
@@ -69,17 +71,28 @@ class RenderVoiceCloneRequest(BaseModel):
     )
     reference_text: str | None = Field(
         default=None,
-        description="Exact transcript of the reference audio (required for breeze)",
+        description=(
+            "Exact transcript of the reference audio. "
+            "Required for breeze; optional for omnivoice (Whisper transcribes)."
+        ),
     )
     instruction: str | None = Field(
         default=None,
-        description="Voice direction instruction (used by breeze; ignored by cosyvoice)",
+        description="Voice direction instruction (used by breeze; ignored by omnivoice)",
     )
     cfg_scale: float = Field(
         default=4.0, ge=0.1, le=10.0, description="CFG scale (used by breeze)"
     )
     speed: float = Field(
-        default=1.0, gt=0.2, le=3.0, description="Speech rate (used by cosyvoice)"
+        default=1.0, gt=0.2, le=3.0,
+        description="Speech rate (currently unused by both engines)",
+    )
+    language: str | None = Field(
+        default=None,
+        description=(
+            "Language of the text to synthesize (e.g. 'spanish'). "
+            "Used by omnivoice; ignored by breeze."
+        ),
     )
     seed: int | None = Field(default=None, description="Seed; -1 or null = random")
 
@@ -172,6 +185,7 @@ def render_voice_clone(request: RenderVoiceCloneRequest):
             instruction=request.instruction,
             cfg_scale=request.cfg_scale,
             speed=request.speed,
+            language=request.language,
             seed=request.seed,
         )
         return RenderResponse(status="success", file_path=saved_path)
@@ -184,9 +198,10 @@ def render_voice_clone(request: RenderVoiceCloneRequest):
 @app.post("/render_voice_design", response_model=RenderResponse)
 def render_voice_design(request: RenderVoiceDesignRequest):
     try:
-        if request.engine_name != "breeze":
+        if request.engine_name not in VOICE_DESIGN_ENGINES:
             raise ValueError(
-                "Voice design is only supported by 'breeze'. "
+                f"Voice design is only supported by: "
+                f"{', '.join(sorted(VOICE_DESIGN_ENGINES))}. "
                 f"Received engine_name='{request.engine_name}'."
             )
 

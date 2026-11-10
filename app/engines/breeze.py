@@ -2,7 +2,6 @@
 import random
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
 
@@ -82,8 +81,6 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
 
     @staticmethod
     def _resolve_seed(seed: int | None) -> int:
-        # infer.py passes the seed straight to np.random.seed(), which rejects -1.
-        # Translate "random" (-1 or None) into a valid 32-bit seed here.
         if seed is None or seed == -1:
             return random.randint(0, 2**32 - 1)
         return seed
@@ -114,6 +111,7 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
         instruction: str | None = None,
         cfg_scale: float = 4.0,
         speed: float = 1.0,
+        language: str | None = None,  # ignored by Breeze
         seed: int | None = None,
     ) -> str:
         if not text or not text.strip():

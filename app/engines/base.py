@@ -51,6 +51,7 @@ class VoiceProducer(ABC):
         instruction: str | None = None,
         cfg_scale: float = 4.0,
         speed: float = 1.0,
+        language: str | None = None,
         seed: int | None = None,
     ) -> str:
         pass
