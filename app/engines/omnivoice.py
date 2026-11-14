@@ -9,8 +9,8 @@ import torch
 
 from app.config import settings
 from app.engines.base import BaseInferenceEngine, VoiceProducer
-from app.engines.io_utils import prepare_output_path
-from app.engines.seeding import isolated_seed
+from app.utils.io_utils import prepare_output_path
+from app.utils.seeding import isolated_seed
 
 # OmniVoice language names as expected by model.generate().
 SUPPORTED_LANGUAGES = frozenset(
