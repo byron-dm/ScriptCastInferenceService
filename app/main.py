@@ -16,7 +16,7 @@ app = FastAPI(
     ),
 )
 
-MAX_AUDIO_DURATION_SECONDS = 285.0
+MAX_AUDIO_DURATION_SECONDS = 300.0
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".flac"}
 VOICE_CLONE_ENGINES = {"breeze", "omnivoice"}
 VOICE_DESIGN_ENGINES = {"breeze"}

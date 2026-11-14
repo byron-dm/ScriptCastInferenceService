@@ -18,7 +18,7 @@ torch==2.8.0
 torchaudio==2.8.0
 lightning>=2.2.4
 pytorch-lightning
-transformers
+transformers==4.57.3
 diffusers
 einops
 x-transformers==2.11.24

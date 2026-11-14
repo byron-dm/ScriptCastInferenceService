@@ -149,7 +149,7 @@ Full payload:
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | prompt | Yes | — | Audio description |
-| duration_seconds | Yes | — | Max ~285 s |
+| duration_seconds | Yes | — | Max ~300 s |
 | output_file_path | Yes | — | Absolute path .wav or .flac |
 | seed | No | random | — |
 | steps | No | 8 | 8 is fast mode (LCM) |
