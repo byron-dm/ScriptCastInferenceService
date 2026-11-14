@@ -21,7 +21,12 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
     def __init__(self, model_path: str | None = None) -> None:
         self._model_path: str = model_path or str(settings.BREEZE_MODEL_PATH)
         self._device: str = settings.DEVICE
+        # `_lock` protects load/unload; `_infer_lock` serializes inference.
+        # Breeze spawns a subprocess per call; concurrent infer.py processes
+        # would each load the model into VRAM -> OOM. The infer lock prevents
+        # overlapping subprocesses for this engine.
         self._lock = threading.Lock()
+        self._infer_lock = threading.Lock()
         self._loaded = False
 
     @property
@@ -82,7 +87,7 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
     @staticmethod
     def _resolve_seed(seed: int | None) -> int:
         if seed is None or seed == -1:
-            return random.randint(0, 2**32 - 1)
+            return random.randint(0, 2 ** 32 - 1)
         return seed
 
     def _run_infer(self, cmd: list[str]) -> None:
@@ -103,16 +108,16 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
             )
 
     def generate_voice(
-        self,
-        text: str,
-        output_file_path: str,
-        reference_audio_path: str | None = None,
-        reference_text: str | None = None,
-        instruction: str | None = None,
-        cfg_scale: float = 4.0,
-        speed: float = 1.0,
-        language: str | None = None,  # ignored by Breeze
-        seed: int | None = None,
+            self,
+            text: str,
+            output_file_path: str,
+            reference_audio_path: str | None = None,
+            reference_text: str | None = None,
+            instruction: str | None = None,
+            cfg_scale: float = 4.0,
+            speed: float = 1.0,
+            language: str | None = None,  # ignored by Breeze
+            seed: int | None = None,
     ) -> str:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
@@ -130,9 +135,6 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
 
         dest_path = self._prepare_output_path(output_file_path)
 
-        if not self.is_loaded:
-            self.load_model()
-
         cmd = [
             sys.executable,
             str(settings.BREEZE_CODE_PATH / "infer.py"),
@@ -147,22 +149,28 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
         if instruction:
             cmd += ["--instruction", instruction]
 
-        self._run_infer(cmd)
+        # Serialize the whole generation (model check + subprocess) so two
+        # concurrent calls cannot spawn two infer.py processes at once.
+        with self._infer_lock:
+            if not self.is_loaded:
+                self.load_model()
 
-        if not dest_path.is_file():
-            raise RuntimeError(
-                f"infer.py exited successfully but no file was written to {dest_path}"
-            )
+            self._run_infer(cmd)
+
+            if not dest_path.is_file():
+                raise RuntimeError(
+                    f"infer.py exited successfully but no file was written to {dest_path}"
+                )
 
         return str(dest_path)
 
     def generate_voice_design(
-        self,
-        text: str,
-        instruction: str,
-        output_file_path: str,
-        cfg_scale: float = 4.0,
-        seed: int | None = None,
+            self,
+            text: str,
+            instruction: str,
+            output_file_path: str,
+            cfg_scale: float = 4.0,
+            seed: int | None = None,
     ) -> str:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
@@ -173,9 +181,6 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
             )
 
         dest_path = self._prepare_output_path(output_file_path)
-
-        if not self.is_loaded:
-            self.load_model()
 
         cmd = [
             sys.executable,
@@ -188,11 +193,15 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
             "--seed", str(self._resolve_seed(seed)),
         ]
 
-        self._run_infer(cmd)
+        with self._infer_lock:
+            if not self.is_loaded:
+                self.load_model()
 
-        if not dest_path.is_file():
-            raise RuntimeError(
-                f"infer.py exited successfully but no file was written to {dest_path}"
-            )
+            self._run_infer(cmd)
+
+            if not dest_path.is_file():
+                raise RuntimeError(
+                    f"infer.py exited successfully but no file was written to {dest_path}"
+                )
 
         return str(dest_path)

@@ -31,7 +31,11 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
         self._model = None
         self._sample_rate: int = 24000
         self._device: str = settings.DEVICE
+        # `_lock` protects load/unload; `_infer_lock` serializes generation.
+        # The model instance is not thread-safe for concurrent forward passes
+        # and the global RNG seeding below must not interleave with another call.
         self._lock = threading.Lock()
+        self._infer_lock = threading.Lock()
 
     @property
     def is_loaded(self) -> bool:
@@ -148,48 +152,51 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
         # OmniVoice has no style-instruction mode; use Breeze for that.
         dest_path = self._prepare_output_path(output_file_path)
 
-        if not self.is_loaded:
-            self.load_model()
+        # Serialize generation: the model is not thread-safe and the global
+        # RNG seeding below must not interleave with another generate() call.
+        with self._infer_lock:
+            if not self.is_loaded:
+                self.load_model()
 
-        if self._model is None:
-            raise RuntimeError("Model not loaded after load_model()")
+            if self._model is None:
+                raise RuntimeError("Model not loaded after load_model()")
 
-        if seed is not None and seed != -1:
-            random.seed(seed)
-            np.random.seed(seed % (2 ** 32))
-            torch.manual_seed(seed)
-            if self._device == "cuda":
-                torch.cuda.manual_seed_all(seed)
+            if seed is not None and seed != -1:
+                random.seed(seed)
+                np.random.seed(seed % (2 ** 32))
+                torch.manual_seed(seed)
+                if self._device == "cuda":
+                    torch.cuda.manual_seed_all(seed)
 
-        generate_kwargs = {
-            "text": text.strip(),
-            "ref_audio": reference_audio_path,
-        }
-        if reference_text and reference_text.strip():
-            generate_kwargs["ref_text"] = reference_text.strip()
-        if language:
-            generate_kwargs["language"] = language.lower()
+            generate_kwargs = {
+                "text": text.strip(),
+                "ref_audio": reference_audio_path,
+            }
+            if reference_text and reference_text.strip():
+                generate_kwargs["ref_text"] = reference_text.strip()
+            if language:
+                generate_kwargs["language"] = language.lower()
 
-        audio = self._model.generate(**generate_kwargs)
+            audio = self._model.generate(**generate_kwargs)
 
-        # OmniVoice returns a list of np.ndarray chunks.
-        if isinstance(audio, list):
-            audio_np = np.concatenate(
-                [np.asarray(a, dtype=np.float32).squeeze() for a in audio]
-            )
-        elif isinstance(audio, torch.Tensor):
-            audio_np = audio.detach().cpu().numpy().squeeze()
-        else:
-            audio_np = np.asarray(audio, dtype=np.float32).squeeze()
+            # OmniVoice returns a list of np.ndarray chunks.
+            if isinstance(audio, list):
+                audio_np = np.concatenate(
+                    [np.asarray(a, dtype=np.float32).squeeze() for a in audio]
+                )
+            elif isinstance(audio, torch.Tensor):
+                audio_np = audio.detach().cpu().numpy().squeeze()
+            else:
+                audio_np = np.asarray(audio, dtype=np.float32).squeeze()
 
-        if audio_np.size == 0:
-            raise RuntimeError("OmniVoice produced no audio")
+            if audio_np.size == 0:
+                raise RuntimeError("OmniVoice produced no audio")
 
-        max_val = float(np.max(np.abs(audio_np)))
-        if max_val > 0:
-            audio_np = audio_np / max_val
-        audio_np = np.clip(audio_np, -1.0, 1.0)
+            max_val = float(np.max(np.abs(audio_np)))
+            if max_val > 0:
+                audio_np = audio_np / max_val
+            audio_np = np.clip(audio_np, -1.0, 1.0)
 
-        self._atomic_write(dest_path, audio_np, samplerate=self._sample_rate)
+            self._atomic_write(dest_path, audio_np, samplerate=self._sample_rate)
 
         return str(dest_path)
