@@ -94,6 +94,7 @@ class Settings:
 
         self.DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
         self.STABLE_AUDIO_MODEL_ID: str = "stabilityai/stable-audio-3-medium"
+        self.TANGOFLUX_MODEL_ID: str = "declare-lab/TangoFlux"
 
         self.BREEZE_CODE_PATH: Path = self.MODELS_DIR / "breeze-tts"
         self.BREEZE_MODEL_PATH: Path = self.MODELS_DIR / "breeze-tts-2"

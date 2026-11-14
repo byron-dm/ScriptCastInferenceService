@@ -6,6 +6,7 @@ from app.engines.base import (
 from app.engines.breeze import BreezeEngine
 from app.engines.omnivoice import OmniVoiceEngine
 from app.engines.stable_audio import StableAudioEngine
+from app.engines.tangoflux import TangoFluxEngine
 
 T = TypeVar("T")
 
@@ -16,6 +17,7 @@ class EngineManager:
     def __init__(self) -> None:
         self._engines: Dict[str, BaseInferenceEngine] = {
             "stable-audio-3": StableAudioEngine(),
+            "tangoflux": TangoFluxEngine(),
             "breeze": BreezeEngine(),
             "omnivoice": OmniVoiceEngine(),
         }

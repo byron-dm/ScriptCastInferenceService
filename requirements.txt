@@ -49,3 +49,4 @@ omnivoice
 
 # --- Hugging Face Hub ---
 huggingface_hub
+tangoflux
