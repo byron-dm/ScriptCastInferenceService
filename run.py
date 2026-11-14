@@ -1,11 +1,9 @@
 ﻿import os
+import sys
 
 os.environ["TORCHDYNAMO_DISABLE"] = "1"
 
 import uvicorn
-
-from app.config import settings
-from app.main import app
 
 LOG_CONFIG = {
     "version": 1,
@@ -43,7 +41,34 @@ LOG_CONFIG = {
     },
 }
 
-if __name__ == "__main__":
+
+def _load_app():
+    """Import the FastAPI app, surfacing startup errors cleanly.
+
+    ``app.config`` instantiates ``Settings`` at import time, so an invalid
+    ``--cache-dir`` raises ``RuntimeError`` during the import. We catch it
+    here to print an actionable message instead of a raw traceback, while
+    still allowing ``INFERENCE_DEBUG=1`` to surface the full traceback.
+    """
+    from app.config import settings
+    from app.main import app
+    return settings, app
+
+
+def main() -> int:
+    debug = os.getenv("INFERENCE_DEBUG", "").lower() in {"1", "true", "yes"}
+
+    try:
+        settings, app = _load_app()
+    except Exception as exc:
+        if debug:
+            raise
+        print(
+            f"Failed to start inference service: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
     uvicorn.run(
         app,
         host=settings.HOST,
@@ -51,3 +76,8 @@ if __name__ == "__main__":
         log_level="info",
         log_config=LOG_CONFIG,
     )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

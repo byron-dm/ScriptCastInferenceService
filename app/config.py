@@ -42,6 +42,46 @@ def parse_arguments() -> argparse.Namespace:
     return args
 
 
+def _resolve_models_dir(raw_cache_dir: str) -> Path:
+    """Resolve and validate the models cache directory.
+
+    On Windows, ``Path.mkdir(parents=True)`` cannot create a drive root
+    (e.g. ``E:\\``); if the drive is not mounted, ``mkdir`` fails with a
+    cryptic ``FileNotFoundError``. We validate the path here and raise a
+    clear ``RuntimeError`` instead.
+    """
+    clean_cache_dir = raw_cache_dir.strip('\'"').rstrip("\\/")
+    if not clean_cache_dir:
+        raise RuntimeError(
+            "The --cache-dir value is empty. Pass a valid directory, "
+            "e.g. --cache-dir C:\\scriptcast"
+        )
+
+    models_dir = Path(clean_cache_dir).resolve()
+
+    # On Windows, the drive root must already exist; mkdir(parents=True)
+    # cannot create it. Fail with context if it does not.
+    if os.name == "nt":
+        drive = models_dir.drive  # e.g. "E:" or "\\\\server\\share"
+        if drive and not Path(drive + os.sep).exists():
+            raise RuntimeError(
+                f"Cannot use --cache-dir '{models_dir}': drive "
+                f"'{drive}' is not available. Check that the drive is "
+                f"mounted or pass a different --cache-dir."
+            )
+
+    try:
+        models_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot create --cache-dir '{models_dir}': {exc}. "
+            f"Check the path and permissions, or pass a different "
+            f"--cache-dir."
+        ) from exc
+
+    return models_dir
+
+
 class Settings:
 
     def __init__(self) -> None:
@@ -49,8 +89,7 @@ class Settings:
         self.HOST: str = args.host
         self.PORT: int = args.port
 
-        clean_cache_dir = args.cache_dir.strip('\'"').rstrip("\\/")
-        self.MODELS_DIR: Path = Path(clean_cache_dir).resolve()
+        self.MODELS_DIR: Path = _resolve_models_dir(args.cache_dir)
         self.HF_TOKEN: str | None = args.hf_token
 
         self.DEVICE: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -60,8 +99,6 @@ class Settings:
         self.BREEZE_MODEL_PATH: Path = self.MODELS_DIR / "breeze-tts-2"
 
         self.OMNIVOICE_MODEL_PATH: Path = self.MODELS_DIR / "omnivoice"
-
-        self.MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         os.environ["HF_HOME"] = str(self.MODELS_DIR)
         os.environ["HUGGINGFACE_HUB_CACHE"] = str(self.MODELS_DIR)
