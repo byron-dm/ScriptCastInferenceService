@@ -13,8 +13,7 @@ from app.engines.base import (
     VoiceDesignProducer,
     VoiceProducer,
 )
-
-SUPPORTED_EXTENSIONS = frozenset({".wav", ".flac"})
+from app.engines.io_utils import prepare_output_path
 
 WORKER_SCRIPT = Path(__file__).with_name("_breeze_worker.py")
 WORKER_READY_TIMEOUT_S = 600.0
@@ -185,29 +184,6 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
 
     # --- validation ------------------------------------------------------
 
-    def _prepare_output_path(self, output_file_path: str) -> Path:
-        if not output_file_path:
-            raise ValueError("output_file_path cannot be empty")
-
-        dest_path = Path(output_file_path)
-        if not dest_path.is_absolute():
-            raise ValueError("output_file_path must be an absolute path")
-        if dest_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(
-                f"Unsupported extension: '{dest_path.suffix}'. "
-                f"Use: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-            )
-
-        parent = dest_path.parent
-        try:
-            parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise ValueError(f"Cannot create directory {parent}: {exc}") from exc
-        if not os.access(parent, os.W_OK):
-            raise ValueError(f"No write permission for {parent}")
-
-        return dest_path
-
     @staticmethod
     def _resolve_seed(seed: int | None) -> int:
         if seed is None or seed == -1:
@@ -242,7 +218,7 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
                 "content of the reference audio."
             )
 
-        dest_path = self._prepare_output_path(output_file_path)
+        dest_path = prepare_output_path(output_file_path)
 
         args = {
             "text": text,
@@ -284,7 +260,7 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
                 "the target speaker and delivery style."
             )
 
-        dest_path = self._prepare_output_path(output_file_path)
+        dest_path = prepare_output_path(output_file_path)
 
         args = {
             "text": text,

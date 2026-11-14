@@ -9,9 +9,8 @@ import torch
 
 from app.config import settings
 from app.engines.base import BaseInferenceEngine, VoiceProducer
+from app.engines.io_utils import prepare_output_path
 from app.engines.seeding import isolated_seed
-
-SUPPORTED_EXTENSIONS = frozenset({".wav", ".flac"})
 
 # OmniVoice language names as expected by model.generate().
 SUPPORTED_LANGUAGES = frozenset(
@@ -77,30 +76,6 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
                 torch.cuda.empty_cache()
 
     @staticmethod
-    def _prepare_output_path(output_file_path: str) -> Path:
-        if not output_file_path:
-            raise ValueError("output_file_path cannot be empty")
-
-        dest_path = Path(output_file_path)
-        if not dest_path.is_absolute():
-            raise ValueError("output_file_path must be an absolute path")
-        if dest_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(
-                f"Unsupported extension: '{dest_path.suffix}'. "
-                f"Use: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-            )
-
-        parent = dest_path.parent
-        try:
-            parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise ValueError(f"Cannot create directory {parent}: {exc}") from exc
-        if not os.access(parent, os.W_OK):
-            raise ValueError(f"No write permission for {parent}")
-
-        return dest_path
-
-    @staticmethod
     def _atomic_write(dest_path: Path, data: np.ndarray, samplerate: int) -> None:
         fd, tmp_name = tempfile.mkstemp(
             dir=str(dest_path.parent),
@@ -150,7 +125,7 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
 
         # `instruction` and `cfg_scale` are accepted but ignored.
         # OmniVoice has no style-instruction mode; use Breeze for that.
-        dest_path = self._prepare_output_path(output_file_path)
+        dest_path = prepare_output_path(output_file_path)
 
         # Serialize generation: the model is not thread-safe.
         with self._infer_lock:
@@ -171,8 +146,8 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
 
             # Apply seed isolated from the global RNG state.
             with isolated_seed(
-                    None if seed is None or seed == -1 else seed,
-                    device=self._device,
+                None if seed is None or seed == -1 else seed,
+                device=self._device,
             ):
                 audio = self._model.generate(**generate_kwargs)
 

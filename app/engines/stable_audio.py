@@ -14,13 +14,13 @@ import torch
 
 from app.config import settings
 from app.engines.base import AudioCueProducer, BaseInferenceEngine
+from app.engines.io_utils import prepare_output_path
 from app.engines.seeding import isolated_seed
 
 # Samplers supported by stable-audio-tools (not the ComfyUI ones).
 SUPPORTED_SAMPLERS = frozenset(
     {"pingpong", "euler", "heun", "dpmpp-2m-sde", "dpmpp-3m-sde", "rk4"}
 )
-SUPPORTED_EXTENSIONS = frozenset({".wav", ".flac"})
 
 
 class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
@@ -64,46 +64,11 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
                 torch.cuda.empty_cache()
 
     @staticmethod
-    def _prepare_output_path(output_file_path: str) -> Path:
-        """Validates and prepares the output path before spending VRAM."""
-        if not output_file_path:
-            raise ValueError("output_file_path cannot be empty")
-
-        dest_path = Path(output_file_path)
-
-        if not dest_path.is_absolute():
-            raise ValueError("output_file_path must be an absolute path")
-
-        if dest_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(
-                f"Unsupported extension: '{dest_path.suffix}'. "
-                f"Use: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-            )
-
-        parent = dest_path.parent
-        try:
-            parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise ValueError(
-                f"Cannot create directory {parent}: {exc}"
-            ) from exc
-
-        if not os.access(parent, os.W_OK):
-            raise ValueError(f"No write permission for {parent}")
-
-        if dest_path.exists() and not os.access(dest_path, os.W_OK):
-            raise ValueError(
-                f"Existing file is not writable: {dest_path}"
-            )
-
-        return dest_path
-
-    @staticmethod
     def _atomic_write(
-            dest_path: Path,
-            data: np.ndarray,
-            samplerate: int,
-            output_format: str,
+        dest_path: Path,
+        data: np.ndarray,
+        samplerate: int,
+        output_format: str,
     ) -> None:
         """Write to a temp file and os.replace (atomic on the same FS)."""
         fd, tmp_name = tempfile.mkstemp(
@@ -127,14 +92,14 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
             raise
 
     def generate_cue(
-            self,
-            prompt: str,
-            duration_seconds: float,
-            output_file_path: str,
-            steps: int = 8,
-            cfg_scale: float = 1.0,
-            sampler_type: str = "pingpong",
-            seed: int | None = None,
+        self,
+        prompt: str,
+        duration_seconds: float,
+        output_file_path: str,
+        steps: int = 8,
+        cfg_scale: float = 1.0,
+        sampler_type: str = "pingpong",
+        seed: int | None = None,
     ) -> str:
         # 1) Validate before spending VRAM.
         if not prompt or not prompt.strip():
@@ -146,7 +111,7 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
                 f"Use: {', '.join(sorted(SUPPORTED_SAMPLERS))}"
             )
 
-        dest_path = self._prepare_output_path(output_file_path)
+        dest_path = prepare_output_path(output_file_path)
 
         # Serialize generation: the model is not thread-safe.
         with self._infer_lock:
