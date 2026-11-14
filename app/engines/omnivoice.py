@@ -1,5 +1,4 @@
 ﻿import os
-import random
 import tempfile
 import threading
 from pathlib import Path
@@ -10,6 +9,7 @@ import torch
 
 from app.config import settings
 from app.engines.base import BaseInferenceEngine, VoiceProducer
+from app.engines.seeding import isolated_seed
 
 SUPPORTED_EXTENSIONS = frozenset({".wav", ".flac"})
 
@@ -32,8 +32,7 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
         self._sample_rate: int = 24000
         self._device: str = settings.DEVICE
         # `_lock` protects load/unload; `_infer_lock` serializes generation.
-        # The model instance is not thread-safe for concurrent forward passes
-        # and the global RNG seeding below must not interleave with another call.
+        # The model instance is not thread-safe for concurrent forward passes.
         self._lock = threading.Lock()
         self._infer_lock = threading.Lock()
 
@@ -77,7 +76,8 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    def _prepare_output_path(self, output_file_path: str) -> Path:
+    @staticmethod
+    def _prepare_output_path(output_file_path: str) -> Path:
         if not output_file_path:
             raise ValueError("output_file_path cannot be empty")
 
@@ -152,21 +152,13 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
         # OmniVoice has no style-instruction mode; use Breeze for that.
         dest_path = self._prepare_output_path(output_file_path)
 
-        # Serialize generation: the model is not thread-safe and the global
-        # RNG seeding below must not interleave with another generate() call.
+        # Serialize generation: the model is not thread-safe.
         with self._infer_lock:
             if not self.is_loaded:
                 self.load_model()
 
             if self._model is None:
                 raise RuntimeError("Model not loaded after load_model()")
-
-            if seed is not None and seed != -1:
-                random.seed(seed)
-                np.random.seed(seed % (2 ** 32))
-                torch.manual_seed(seed)
-                if self._device == "cuda":
-                    torch.cuda.manual_seed_all(seed)
 
             generate_kwargs = {
                 "text": text.strip(),
@@ -177,7 +169,12 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
             if language:
                 generate_kwargs["language"] = language.lower()
 
-            audio = self._model.generate(**generate_kwargs)
+            # Apply seed isolated from the global RNG state.
+            with isolated_seed(
+                    None if seed is None or seed == -1 else seed,
+                    device=self._device,
+            ):
+                audio = self._model.generate(**generate_kwargs)
 
             # OmniVoice returns a list of np.ndarray chunks.
             if isinstance(audio, list):

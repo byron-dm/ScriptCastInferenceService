@@ -14,6 +14,7 @@ import torch
 
 from app.config import settings
 from app.engines.base import AudioCueProducer, BaseInferenceEngine
+from app.engines.seeding import isolated_seed
 
 # Samplers supported by stable-audio-tools (not the ComfyUI ones).
 SUPPORTED_SAMPLERS = frozenset(
@@ -31,8 +32,7 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
         self._model_config: dict | None = None
         self._device: str = settings.DEVICE
         # `_lock` protects load/unload; `_infer_lock` serializes generation.
-        # The diffusion model is not safe for concurrent forward passes and
-        # the global torch seeding below must not interleave with another call.
+        # The diffusion model is not safe for concurrent forward passes.
         self._lock = threading.Lock()
         self._infer_lock = threading.Lock()
 
@@ -63,7 +63,8 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    def _prepare_output_path(self, output_file_path: str) -> Path:
+    @staticmethod
+    def _prepare_output_path(output_file_path: str) -> Path:
         """Validates and prepares the output path before spending VRAM."""
         if not output_file_path:
             raise ValueError("output_file_path cannot be empty")
@@ -99,10 +100,10 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
 
     @staticmethod
     def _atomic_write(
-        dest_path: Path,
-        data: np.ndarray,
-        samplerate: int,
-        output_format: str,
+            dest_path: Path,
+            data: np.ndarray,
+            samplerate: int,
+            output_format: str,
     ) -> None:
         """Write to a temp file and os.replace (atomic on the same FS)."""
         fd, tmp_name = tempfile.mkstemp(
@@ -126,14 +127,14 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
             raise
 
     def generate_cue(
-        self,
-        prompt: str,
-        duration_seconds: float,
-        output_file_path: str,
-        steps: int = 8,
-        cfg_scale: float = 1.0,
-        sampler_type: str = "pingpong",
-        seed: int | None = None,
+            self,
+            prompt: str,
+            duration_seconds: float,
+            output_file_path: str,
+            steps: int = 8,
+            cfg_scale: float = 1.0,
+            sampler_type: str = "pingpong",
+            seed: int | None = None,
     ) -> str:
         # 1) Validate before spending VRAM.
         if not prompt or not prompt.strip():
@@ -147,8 +148,7 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
 
         dest_path = self._prepare_output_path(output_file_path)
 
-        # Serialize generation: the model is not thread-safe and the global
-        # torch seeding below must not interleave with another generate() call.
+        # Serialize generation: the model is not thread-safe.
         with self._infer_lock:
             # 2) Load model if needed.
             if not self.is_loaded:
@@ -184,20 +184,18 @@ class StableAudioEngine(BaseInferenceEngine, AudioCueProducer):
             if seed is None:
                 seed = int(np.random.randint(0, 2147483647))
 
-            torch.manual_seed(seed)
-            if self._device == "cuda":
-                torch.cuda.manual_seed_all(seed)
-
-            output = generate_diffusion_cond_inpaint(
-                model=self._model,
-                steps=steps,
-                cfg_scale=cfg_scale,
-                conditioning=conditioning,  # type: ignore[arg-type]
-                sample_size=sample_size,
-                sampler_type=sampler_type,
-                device=self._device,
-                seed=seed,
-            )
+            # Apply seed isolated from the global RNG state.
+            with isolated_seed(seed, device=self._device):
+                output = generate_diffusion_cond_inpaint(
+                    model=self._model,
+                    steps=steps,
+                    cfg_scale=cfg_scale,
+                    conditioning=conditioning,  # type: ignore[arg-type]
+                    sample_size=sample_size,
+                    sampler_type=sampler_type,
+                    device=self._device,
+                    seed=seed,
+                )
 
             output = rearrange(output, "b d n -> d (b n)")
             output = output[:, :requested_samples]
