@@ -28,7 +28,6 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
     def __init__(self, model_path: str | None = None) -> None:
         self._model_path: str = model_path or str(settings.OMNIVOICE_MODEL_PATH)
         self._model = None
-        self._sample_rate: int = 24000
         self._device: str = settings.DEVICE
         # `_lock` protects load/unload; `_infer_lock` serializes generation.
         # The model instance is not thread-safe for concurrent forward passes.
@@ -146,8 +145,8 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
 
             # Apply seed isolated from the global RNG state.
             with isolated_seed(
-                None if seed is None or seed == -1 else seed,
-                device=self._device,
+                    None if seed is None or seed == -1 else seed,
+                    device=self._device,
             ):
                 audio = self._model.generate(**generate_kwargs)
 
@@ -169,6 +168,10 @@ class OmniVoiceEngine(BaseInferenceEngine, VoiceProducer):
                 audio_np = audio_np / max_val
             audio_np = np.clip(audio_np, -1.0, 1.0)
 
-            self._atomic_write(dest_path, audio_np, samplerate=self._sample_rate)
+            # Read sample rate from the model if available, otherwise fallback.
+            # (The old code hardcoded 24000).
+            sample_rate = getattr(self._model, "sample_rate", 24000)
+
+            self._atomic_write(dest_path, audio_np, samplerate=sample_rate)
 
         return str(dest_path)

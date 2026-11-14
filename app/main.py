@@ -9,7 +9,7 @@ from app.engines.manager import engine_manager
 
 app = FastAPI(
     title="Audio Inference Service",
-    version="1.5.0",
+    version="1.6.0",
     description=(
         "Multi-engine audio synthesis microservice "
         "(Audio, Voice Cloning, Voice Design)"
@@ -18,8 +18,6 @@ app = FastAPI(
 
 MAX_AUDIO_DURATION_SECONDS = 300.0
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".flac"}
-VOICE_CLONE_ENGINES = {"breeze", "omnivoice"}
-VOICE_DESIGN_ENGINES = {"breeze"}
 
 
 # --- DTOs ---
@@ -60,7 +58,7 @@ class RenderAudioRequest(BaseModel):
 class RenderVoiceCloneRequest(BaseModel):
     engine_name: str = Field(
         default="breeze",
-        description="Voice cloning engine: breeze or omnivoice",
+        description="Voice cloning engine. Available engines are derived dynamically.",
     )
     text: str = Field(..., min_length=1, description="Speech content to synthesize")
     output_file_path: str = Field(
@@ -100,7 +98,7 @@ class RenderVoiceCloneRequest(BaseModel):
 class RenderVoiceDesignRequest(BaseModel):
     engine_name: str = Field(
         default="breeze",
-        description="Voice design engine. Only 'breeze' is supported.",
+        description="Voice design engine. Available engines are derived dynamically.",
     )
     text: str = Field(..., min_length=1, description="Speech content to synthesize")
     instruction: str = Field(
@@ -138,6 +136,30 @@ def health_check():
     }
 
 
+@app.post("/unload/{engine_name}")
+def unload_engine(engine_name: str):
+    """Unload a specific engine to free VRAM."""
+    try:
+        engine_manager.unload_engine(engine_name)
+        return {"status": "success", "message": f"Engine '{engine_name}' unloaded."}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/unload_all")
+def unload_all_engines():
+    """Unload all registered engines to free VRAM."""
+    try:
+        # Derive the list of names from the manager's status dictionary.
+        for name in engine_manager.get_status().keys():
+            engine_manager.unload_engine(name)
+        return {"status": "success", "message": "All engines unloaded."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/render_audio", response_model=RenderResponse)
 def render_audio(request: RenderAudioRequest):
     try:
@@ -163,10 +185,12 @@ def render_audio(request: RenderAudioRequest):
 @app.post("/render_voice_clone", response_model=RenderResponse)
 def render_voice_clone(request: RenderVoiceCloneRequest):
     try:
-        if request.engine_name not in VOICE_CLONE_ENGINES:
+        # Dynamically check if the requested engine supports voice cloning.
+        available_engines = engine_manager.get_engines_by_interface(VoiceProducer)
+        if request.engine_name not in available_engines:
             raise ValueError(
                 f"Unsupported voice cloning engine '{request.engine_name}'. "
-                f"Available: {', '.join(sorted(VOICE_CLONE_ENGINES))}"
+                f"Available: {', '.join(available_engines)}"
             )
 
         if request.engine_name == "breeze" and not request.reference_text:
@@ -198,10 +222,12 @@ def render_voice_clone(request: RenderVoiceCloneRequest):
 @app.post("/render_voice_design", response_model=RenderResponse)
 def render_voice_design(request: RenderVoiceDesignRequest):
     try:
-        if request.engine_name not in VOICE_DESIGN_ENGINES:
+        # Dynamically check if the requested engine supports voice design.
+        available_engines = engine_manager.get_engines_by_interface(VoiceDesignProducer)
+        if request.engine_name not in available_engines:
             raise ValueError(
                 f"Voice design is only supported by: "
-                f"{', '.join(sorted(VOICE_DESIGN_ENGINES))}. "
+                f"{', '.join(available_engines)}. "
                 f"Received engine_name='{request.engine_name}'."
             )
 
