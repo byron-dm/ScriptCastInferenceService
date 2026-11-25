@@ -79,7 +79,9 @@ class RenderVoiceCloneRequest(BaseModel):
         description="Voice direction instruction (used by breeze; ignored by omnivoice)",
     )
     cfg_scale: float = Field(
-        default=4.0, ge=0.1, le=10.0, description="CFG scale (used by breeze)"
+        default=4.0, ge=0.1, le=10.0, description="CFG scale for Voice Direction. Ignored (forced to 1.0) when "
+        "'instruction' is not provided, because Breeze Voice Clone has no "
+        "negative prompt."
     )
     speed: float = Field(
         default=1.0, gt=0.2, le=3.0,

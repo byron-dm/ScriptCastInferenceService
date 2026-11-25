@@ -1,5 +1,6 @@
 ﻿import atexit
 import json
+import logging
 import os
 import random
 import subprocess
@@ -14,6 +15,8 @@ from app.engines.base import (
     VoiceProducer,
 )
 from app.utils.io_utils import prepare_output_path
+
+logger = logging.getLogger(__name__)
 
 WORKER_SCRIPT = (
     Path(__file__).resolve().parent.parent / "workers" / "_breeze_worker.py"
@@ -195,16 +198,16 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
     # --- public API ------------------------------------------------------
 
     def generate_voice(
-        self,
-        text: str,
-        output_file_path: str,
-        reference_audio_path: str | None = None,
-        reference_text: str | None = None,
-        instruction: str | None = None,
-        cfg_scale: float = 4.0,
-        speed: float = 1.0,
-        language: str | None = None,  # ignored by Breeze
-        seed: int | None = None,
+            self,
+            text: str,
+            output_file_path: str,
+            reference_audio_path: str | None = None,
+            reference_text: str | None = None,
+            instruction: str | None = None,
+            cfg_scale: float = 4.0,
+            speed: float = 1.0,
+            language: str | None = None,  # ignored by Breeze
+            seed: int | None = None,
     ) -> str:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
@@ -220,6 +223,41 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
                 "content of the reference audio."
             )
 
+        # Breeze routes the request based on whether an instruction is present:
+        #   - with instruction  -> Voice Direction (ref_edit_tata template),
+        #                          which defines a negative prompt, so CFG applies.
+        #   - without instruction -> Voice Clone (ref_clone_tata template),
+        #                          which has no negative prompt and therefore
+        #                          rejects any cfg_scale != 1.0.
+        # Rather than surfacing this internal detail as a client error, derive
+        # the effective cfg_scale from the mode and keep the endpoint contract
+        # stable for callers.
+        has_instruction = bool(instruction and instruction.strip())
+        if has_instruction:
+            mode = "voice-direction"
+            effective_cfg_scale = cfg_scale
+        else:
+            mode = "voice-clone"
+            effective_cfg_scale = 1.0
+            if cfg_scale != 1.0:
+                # The caller asked for CFG in a mode that does not support it.
+                # Proceed with 1.0 and record the discarded value for auditing.
+                logger.info(
+                    "Breeze %s: ignoring cfg_scale=%s (no instruction provided; "
+                    "forcing 1.0). Add 'instruction' to enable Voice Direction.",
+                    mode,
+                    cfg_scale,
+                )
+
+        logger.info(
+            "Breeze %s: cfg_scale=%s seed=%s text_len=%d has_ref_text=%s",
+            mode,
+            effective_cfg_scale,
+            seed,
+            len(text),
+            bool(reference_text),
+        )
+
         dest_path = prepare_output_path(output_file_path)
 
         args = {
@@ -228,7 +266,7 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
             "reference_audio_path": reference_audio_path,
             "reference_text": reference_text,
             "instruction": instruction,
-            "cfg_scale": cfg_scale,
+            "cfg_scale": effective_cfg_scale,
             "seed": self._resolve_seed(seed),
         }
 
