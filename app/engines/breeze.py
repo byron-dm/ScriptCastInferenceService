@@ -15,7 +15,9 @@ from app.engines.base import (
 )
 from app.utils.io_utils import prepare_output_path
 
-WORKER_SCRIPT = Path(__file__).with_name("_breeze_worker.py")
+WORKER_SCRIPT = (
+    Path(__file__).resolve().parent.parent / "workers" / "_breeze_worker.py"
+)
 WORKER_READY_TIMEOUT_S = 600.0
 WORKER_REQUEST_TIMEOUT_S = 600.0
 
