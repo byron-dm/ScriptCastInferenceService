@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+﻿import logging
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -6,6 +7,8 @@ from pydantic import BaseModel, Field, field_validator
 from app.config import settings
 from app.engines.base import AudioCueProducer, VoiceDesignProducer, VoiceProducer
 from app.engines.manager import engine_manager
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Audio Inference Service",
@@ -79,12 +82,19 @@ class RenderVoiceCloneRequest(BaseModel):
         description="Voice direction instruction (used by breeze; ignored by omnivoice)",
     )
     cfg_scale: float = Field(
-        default=4.0, ge=0.1, le=10.0, description="CFG scale for Voice Direction. Ignored (forced to 1.0) when "
-        "'instruction' is not provided, because Breeze Voice Clone has no "
-        "negative prompt."
+        default=4.0,
+        ge=0.1,
+        le=10.0,
+        description=(
+            "CFG scale for Voice Direction. Ignored (forced to 1.0) when "
+            "'instruction' is not provided, because Breeze Voice Clone has no "
+            "negative prompt."
+        ),
     )
     speed: float = Field(
-        default=1.0, gt=0.2, le=3.0,
+        default=1.0,
+        gt=0.2,
+        le=3.0,
         description="Speech rate (currently unused by both engines)",
     )
     language: str | None = Field(
@@ -147,6 +157,7 @@ def unload_engine(engine_name: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        logger.exception("Unhandled error while unloading engine '%s'", engine_name)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -154,11 +165,11 @@ def unload_engine(engine_name: str):
 def unload_all_engines():
     """Unload all registered engines to free VRAM."""
     try:
-        # Derive the list of names from the manager's status dictionary.
         for name in engine_manager.get_status().keys():
             engine_manager.unload_engine(name)
         return {"status": "success", "message": "All engines unloaded."}
     except Exception as exc:
+        logger.exception("Unhandled error while unloading all engines")
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -181,13 +192,16 @@ def render_audio(request: RenderAudioRequest):
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        logger.exception(
+            "Unhandled error during audio rendering (engine='%s')",
+            request.engine_name,
+        )
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/render_voice_clone", response_model=RenderResponse)
 def render_voice_clone(request: RenderVoiceCloneRequest):
     try:
-        # Dynamically check if the requested engine supports voice cloning.
         available_engines = engine_manager.get_engines_by_interface(VoiceProducer)
         if request.engine_name not in available_engines:
             raise ValueError(
@@ -218,13 +232,16 @@ def render_voice_clone(request: RenderVoiceCloneRequest):
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        logger.exception(
+            "Unhandled error during voice clone rendering (engine='%s')",
+            request.engine_name,
+        )
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/render_voice_design", response_model=RenderResponse)
 def render_voice_design(request: RenderVoiceDesignRequest):
     try:
-        # Dynamically check if the requested engine supports voice design.
         available_engines = engine_manager.get_engines_by_interface(VoiceDesignProducer)
         if request.engine_name not in available_engines:
             raise ValueError(
@@ -247,4 +264,8 @@ def render_voice_design(request: RenderVoiceDesignRequest):
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        logger.exception(
+            "Unhandled error during voice design rendering (engine='%s')",
+            request.engine_name,
+        )
         raise HTTPException(status_code=500, detail=str(exc))

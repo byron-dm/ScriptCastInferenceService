@@ -38,6 +38,7 @@ LOG_CONFIG = {
         "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
         "uvicorn.error": {"level": "INFO"},
         "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False},
+        "app": {"handlers": ["default"], "level": "INFO", "propagate": False},
     },
 }
 
@@ -75,6 +76,7 @@ def main() -> int:
         port=settings.PORT,
         log_level="info",
         log_config=LOG_CONFIG,
+        timeout_keep_alive=900
     )
     return 0
 

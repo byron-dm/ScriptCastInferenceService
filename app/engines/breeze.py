@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import queue
 import random
 import subprocess
 import sys
@@ -106,7 +107,7 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
         )
 
         try:
-            ready = self._read_response(worker)
+            ready = self._read_response(worker, timeout_s=WORKER_READY_TIMEOUT_S)
         except Exception:
             self._kill_process(worker)
             raise
@@ -155,24 +156,60 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
             pass
 
     @staticmethod
-    def _read_response(worker: subprocess.Popen) -> dict:
+    def _read_response(worker: subprocess.Popen, timeout_s: float) -> dict:
+        """Read a single NDJSON line from worker stdout with a hard timeout."""
         assert worker.stdout is not None
-        line = worker.stdout.readline()
-        if not line:
+        result_queue: queue.Queue[str | BaseException] = queue.Queue(maxsize=1)
+
+        def _reader() -> None:
+            try:
+                line = worker.stdout.readline()  # type: ignore[union-attr]
+                result_queue.put(line)
+            except BaseException as exc:
+                result_queue.put(exc)
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
+
+        try:
+            item = result_queue.get(timeout=timeout_s)
+        except queue.Empty as exc:
+            raise TimeoutError(
+                f"Breeze worker did not respond within {timeout_s}s."
+            ) from exc
+
+        if isinstance(item, BaseException):
+            raise RuntimeError(
+                f"Error reading from Breeze worker stdout: {item}"
+            ) from item
+
+        if not item:
             raise RuntimeError(
                 "Breeze worker closed stdout unexpectedly; "
                 "check its stderr for the underlying error."
             )
+
         try:
-            return json.loads(line)
+            return json.loads(item)
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                f"Breeze worker returned invalid JSON: {line!r}"
+                f"Breeze worker returned invalid JSON: {item!r}"
             ) from exc
+
+    def _restart_worker(self) -> None:
+        """Forcefully terminate a hung/dead worker and spawn a fresh instance."""
+        logger.warning("Restarting Breeze worker subprocess...")
+        with self._lock:
+            old_worker = self._worker
+            self._worker = None
+            if old_worker is not None:
+                self._kill_process(old_worker)
+        self.load_model()
 
     def _request(self, payload: dict) -> dict:
         if not self.is_loaded:
             self.load_model()
+
         worker = self._worker
         if worker is None or worker.stdin is None:
             raise RuntimeError("Breeze worker is not running")
@@ -180,12 +217,29 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
         try:
             worker.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
             worker.stdin.flush()
-        except (BrokenPipeError, OSError) as exc:
+            return self._read_response(worker, timeout_s=WORKER_REQUEST_TIMEOUT_S)
+        except TimeoutError:
+            logger.error(
+                "Breeze worker timed out after %ss; restarting subprocess.",
+                WORKER_REQUEST_TIMEOUT_S,
+            )
+            self._restart_worker()
             raise RuntimeError(
-                f"Breeze worker is not accepting requests: {exc}"
+                f"Breeze inference timed out after {WORKER_REQUEST_TIMEOUT_S}s "
+                "and the worker was restarted."
+            )
+        except (BrokenPipeError, OSError, RuntimeError) as exc:
+            # If the worker crashed or broke the pipe, reset it so the next
+            # request can recover cleanly instead of failing permanently.
+            if not self.is_loaded:
+                logger.warning("Breeze worker died during request; cleaning up.")
+                with self._lock:
+                    if self._worker is not None:
+                        self._kill_process(self._worker)
+                        self._worker = None
+            raise RuntimeError(
+                f"Breeze worker communication failed: {exc}"
             ) from exc
-
-        return self._read_response(worker)
 
     # --- validation ------------------------------------------------------
 
@@ -198,16 +252,16 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
     # --- public API ------------------------------------------------------
 
     def generate_voice(
-            self,
-            text: str,
-            output_file_path: str,
-            reference_audio_path: str | None = None,
-            reference_text: str | None = None,
-            instruction: str | None = None,
-            cfg_scale: float = 4.0,
-            speed: float = 1.0,
-            language: str | None = None,  # ignored by Breeze
-            seed: int | None = None,
+        self,
+        text: str,
+        output_file_path: str,
+        reference_audio_path: str | None = None,
+        reference_text: str | None = None,
+        instruction: str | None = None,
+        cfg_scale: float = 4.0,
+        speed: float = 1.0,
+        language: str | None = None,  # ignored by Breeze
+        seed: int | None = None,
     ) -> str:
         if not text or not text.strip():
             raise ValueError("text cannot be empty")
@@ -223,15 +277,6 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
                 "content of the reference audio."
             )
 
-        # Breeze routes the request based on whether an instruction is present:
-        #   - with instruction  -> Voice Direction (ref_edit_tata template),
-        #                          which defines a negative prompt, so CFG applies.
-        #   - without instruction -> Voice Clone (ref_clone_tata template),
-        #                          which has no negative prompt and therefore
-        #                          rejects any cfg_scale != 1.0.
-        # Rather than surfacing this internal detail as a client error, derive
-        # the effective cfg_scale from the mode and keep the endpoint contract
-        # stable for callers.
         has_instruction = bool(instruction and instruction.strip())
         if has_instruction:
             mode = "voice-direction"
@@ -240,8 +285,6 @@ class BreezeEngine(BaseInferenceEngine, VoiceProducer, VoiceDesignProducer):
             mode = "voice-clone"
             effective_cfg_scale = 1.0
             if cfg_scale != 1.0:
-                # The caller asked for CFG in a mode that does not support it.
-                # Proceed with 1.0 and record the discarded value for auditing.
                 logger.info(
                     "Breeze %s: ignoring cfg_scale=%s (no instruction provided; "
                     "forcing 1.0). Add 'instruction' to enable Voice Direction.",
